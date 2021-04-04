@@ -5,6 +5,8 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 admin.initializeApp();
 
+const db = admin.firestore();
+
 // Definition of the Cloud Function reacting to publication on the telemetry topic:
 exports.detectTelemetryEvents = functions.pubsub.topic('iot-topic').onPublish(
     (message, context) => {
@@ -14,18 +16,19 @@ exports.detectTelemetryEvents = functions.pubsub.topic('iot-topic').onPublish(
 
         // Firebase SDK for Cloud Functions has a 'json' helper property to decode
         // the message.
-        const soil_humidity = Math.round(message.json.soil_humidity);
+        const soil_humidity = Math.round(message.json.soil_humidity * 10) / 10.0;
         
         // A Pub/Sub message has an 'attributes' property. This property has itself some properties,
         // one of them being 'deviceId' to know which device published the message:
         const deviceId = message.attributes.deviceId;
         // The date the message was issued lies in the context object not in the message object:
         const timestamp = context.timestamp;
+        const timestampDate = new Date(Date.parse(timestamp));
 
         // create new object for database
         let entry = {
-            timestamp: timestamp,
-            soil_humidity: soil_humidity
+            timestamp: timestampDate,
+            soil_humidity: soil_humidity,
         };
 
         // add key for temp, if it exists
@@ -42,8 +45,30 @@ exports.detectTelemetryEvents = functions.pubsub.topic('iot-topic').onPublish(
             entry.watered_flag = message.json.watered_flag;
         }
 
+        // add key for error, if it exists
+        if ("error" in message.json) { 
+            entry.error = message.json.error;
+        }
+
+        // add key for success, if it exists
+        if ("success" in message.json) { 
+            entry.success = message.json.success;
+        }
+
+        // add key for attempt, if it exists
+        if ("attempt" in message.json) { 
+            entry.attempt = message.json.attempt;
+        }
+
         // Log telemetry activity:
-        console.log(`Device=${deviceId}, Soil Humidity=${soil_humidity}%, Timestamp=${timestamp}`);
-        // Push to Firebase Realtime Database telemetry data sorted by device:
-        return admin.database().ref(`devices-sensor-telemetry/${deviceId}`).push(entry);
-    });
+        console.log(`Received data: Device=${deviceId}, Soil Humidity=${soil_humidity}%, Timestamp=${timestamp}`);
+        
+        // Push to firestore telemetry data sorted by device:
+        let documentRef = db.collection(`devices/${deviceId}/telemetry-data`).doc();
+        return documentRef.create(entry).then((res) => {
+            console.log(`Document created at ${res.writeTime.toDate()}`);
+        }).catch((err) => {
+            console.log(`Failed to create document: ${err}`);
+        });
+    }
+);
